@@ -1,0 +1,196 @@
+@model IEnumerable<FakeEstateWeb.Controllers.ManagementController.DatabaseViewModel>
+
+@{
+    ViewBag.Title = "Home Page";
+}
+<div>
+    <h1>Databases</h1>
+    @if (Request["database_error"] == "true")
+    {
+        <div class="alert alert-dismissable alert-danger">
+            <p>A database related error occurred accessing <a href="@Request["return_url"]">@Request["return_url"]</a>. Check the database status below and then try accessing the page again.</p>
+        </div>
+    }
+
+    @foreach (var context in Model)
+    {
+        <div class="panel panel-primary">
+            <div class="panel-heading">
+                <h3 class="panel-title">@context.ContextName</h3>
+            </div>
+            <div class="panel-body">
+                @if (!context.MigrationsEnabled)
+                {
+                    if (context.DatabaseExists)
+                    {
+                        <div>
+                            <div class="alert alert-dismissable alert-success">
+                                <p>There are no migrations for this context but the database already exists.</p>
+                            </div>
+                            <p>EF will assume that the model accurately represents the database schema. If the model does not accurately represent the database schema, you may encoutner exceptions when trying to query and/or save data.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <div>
+                            <div class="alert alert-dismissable alert-danger">
+                                <p>There are no migrations for this context and the database does not exist. To create the database you should add a migration and apply it.</p>
+
+                            </div>
+                            <p>You can add a migration and apply it to the database using Package Manager Console in Visual Studio</p>
+                            <pre>
+PM> Add-Migration [migration name]
+PM> Update-Database</pre>
+                        </div>
+                    }
+                }
+                else
+                {
+                    <div id="databaseUpToDateInfo_@context.ContextName"
+                         style="display: @Html.Raw(context.PendingMigrations.Any() || context.PendingModelChanges ? "none" : "normal");">
+                        <div class="alert alert-dismissable alert-success">
+                            <p>Migrations are enabled for this context and all migrations have been applied to the database.</p>
+                        </div>
+                    </div>
+                    <div id="pendingModelChangesInfo_@context.ContextName"
+                         style="display: @Html.Raw(!context.PendingMigrations.Any() && context.PendingModelChanges ? "normal" : "none");">
+                        <div class="alert alert-dismissable alert-warning">
+                            <p>There are pending changes to the model that have not been applied to the database.</p>
+                        </div>
+                        <p>You can add a migration for these change and apply them to the database using Package Manager Console in Visual Studio:</p>
+                        <pre>
+PM> Add-Migration [my migration name]
+PM> Update-Database
+                        </pre>
+                    </div>
+                    if (context.PendingMigrations.Any())
+                    {
+                        <div id="pendingMigrationsInfo_@context.ContextName">
+                            <div class="alert alert-dismissable @Html.Raw(context.DatabaseExists ? "alert-warning" : "alert-danger")">
+                                @if (context.DatabaseExists)
+                                {
+                                    <p>The database exists but there are pending migrations that have not been applied to the database. </p>
+                                }
+                                else
+                                {
+                                    <p>The database does not exist but there are migrations that can be used to create it.</p>
+                                }
+                                <ul>
+                                    @foreach (var item in context.PendingMigrations)
+                                    {
+                                        <li>@item</li>
+                                    }
+                                </ul>
+                            </div>
+                            <p>You can either <a data-toggle="modal" href="#applyMigrationsDialog_@context.ContextName">apply migrations now</a>, or apply them from Package Manager Console in Visual Studio.</p>
+
+                            <pre>PM> Update-Database</pre>
+                        </div>
+                        <div class="modal" id="applyMigrationsDialog_@context.ContextName">
+                            <div class="modal-dialog">
+                                <div class="modal-content">
+                                    <div class="modal-header">
+                                        <button class="close" aria-hidden="true" type="button" data-dismiss="modal">×</button>
+                                        <h4 class="modal-title">Apply Migrations</h4>
+                                    </div>
+
+                                    <div class="modal-body">
+                                        <div id="applyMigrationsActivity_@context.ContextName" class="well well-sm" style="overflow: scroll; height: 200px;"></div>
+                                        <div class="checkbox" style="right: 20px; position: absolute;">
+                                            <label>
+                                                <input id="verboseCheckbox_@context.ContextName" type="checkbox"> Verbose Logging
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <div class="modal-footer">
+                                        <button class="btn btn-default" type="button" data-dismiss="modal">Close</button>
+                                        <button id="applyMigrationsGoButton_@context.ContextName"
+                                                onclick="ApplyMigrations('@context.MigrationsConfigurationAssemblyQualifiedName', '@context.ContextName')"
+                                                class="btn btn-primary"
+                                                type="button">
+                                            Apply Migrations
+                                        </button>
+                                        <p class="text-danger" id="errorLabel_@context.ContextName" />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@section scripts
+{
+    <!-- Wire up any migration activity to write to log panels -->
+    <script src="~/Scripts/jquery.signalR-2.1.0.min.js"></script>
+    <script src="~/signalr/hubs"></script>
+    <script>
+        $(function () {
+            var log = $.connection.migrationActivityHub;
+            log.client.info = function (context, message) {
+                $('#applyMigrationsActivity_' + context).append('<p class="text-info">' + message + '</p>');
+            };
+            log.client.warning = function (context, message) {
+                $('#applyMigrationsActivity_' + context).append('<p class="text-warning">' + message + '</p>');
+            };
+            log.client.verbose = function (context, message) {
+                if ($("#verboseCheckbox_" + context).is(':checked')) {
+                    $('#applyMigrationsActivity_' + context).append('<p class="text-muted">' + message + '</p>');
+                }
+            };
+
+            $.connection.hub.start()
+        });
+    </script>
+
+    <!-- Script to apply migrations from dialog -->
+    <script>
+        function ApplyMigrations(migrationsConfig, context) {
+            // Reset the dialog
+            $("#applyMigrationsGoButton_" + context).removeClass("btn btn-danger");
+            $("#applyMigrationsGoButton_" + context).addClass("btn btn-default");
+            $("#errorLabel_" + context).html('');
+            $('#activityLog_' + context).empty();
+
+            // Disable controls while migrations are applied
+            $("#applyMigrationsGoButton_" + context).attr("disabled", true);
+            $("#verboseCheckbox_" + context).attr("disabled", true);
+
+            $.ajax({
+                type: "POST",
+                url: "../../api/ManagementApi/ApplyMigrations/?migrationsConfiguration=" + migrationsConfig,
+                success: function (data, status) {
+                    // Make the go button happy
+                    $("#applyMigrationsGoButton_" + context).removeClass("btn btn-default");
+                    $("#applyMigrationsGoButton_" + context).addClass("btn btn-success");
+
+                    // Show the new status of the database
+                    $("#pendingMigrationsInfo_" + context).slideUp("slow", function () {
+                        if (data == 1) {
+                            $("#pendingModelChangesInfo_" + context).slideDown("slow");
+                        }
+                        else {
+                            $("#databaseUpToDateInfo_" + context).slideDown("slow");
+                        }
+                    });
+                },
+                error: function (request, status, error) {
+                    // Make the go button unhappy
+                    $("#applyMigrationsGoButton_" + context).removeClass("btn btn-default");
+                    $("#applyMigrationsGoButton_" + context).addClass("btn btn-danger");
+
+                    // Show error to user
+                    $("#errorLabel_" + context).html(error);
+
+                    // Re-enable the form
+                    $("#applyMigrationsGoButton_" + context).attr("disabled", false);
+                    $("#verboseCheckbox_" + context).attr("disabled", false);
+                }
+            });
+        }
+    </script>
+}
